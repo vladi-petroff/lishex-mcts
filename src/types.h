@@ -306,6 +306,11 @@ typedef struct movelist_t {
         used = 0;
         last = movelist;
     }
+    void erase(scored_move_t* position) {
+        assert(position >= movelist && position < last);
+        std::move(position + 1, last, position);
+        --last;
+    }
     scored_move_t movelist[MAX_MOVES];
     scored_move_t* last = movelist;
     size_t used = 0;

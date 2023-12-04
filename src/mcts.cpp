@@ -35,7 +35,7 @@ public:
     }
 
     Node* insert_child(move_t mv, const board_t* board);
-    Node* best_child();
+    Node* best_child(bool exploration_mode = true);
     void update(double res); // backprop update (increment visits etc.)
     inline bool is_terminal() {
         return this->children.size() == 0;
@@ -127,30 +127,47 @@ void backprop(int reward, Node *node) {
 }
 
 
-Node *Node::best_child() {
+Node *Node::best_child(bool exploration_mode = true) {
     // Calculate UCB values for all the children and pick the highest
     double ucb;
     double best_value = static_cast<double>(INT_MIN);
-    Node *best;
+
+    //Node *best;
+    std::vector<Node*> best_children;
 
     for (Node* child : this->children) {
+
+        assert (child->visits > 0);
+
         // Exploitation term
         ucb = static_cast<double>(child->total_reward) / child->visits;
 
         // Exploration term (TODO: UCB coefficient?)
-        ucb += std::sqrt(2 * std::log(this->visits) / child->visits);
+        // TODO: potentially tune the CONST here (instead of sqrt(2))
+        if(exploration_mode) {
+            ucb += 2 * std::sqrt(std::log(this->visits) / child->visits);
+        }
 
         if (ucb > best_value) {
             best_value = ucb;
-            best = child;
+
+            //best = child;
+            best_children.clear();
+            best_children.push_back(child);
+        } else if (ucb == best_value) {
+            best_children.push_back(child);
         }
+        
     }
 
     assert(best != nullptr);
 
     // REVIEW: Currently, we consider the first best child encountered
     // An improvement could be to keep a list of them and randomly determine ties
-    return best;
+    //return best;
+
+    size_t random_pick = (size_t) rand() % best_children.size();
+    return best_children[random_pick];
 }
 
 Node *Node::insert_child(move_t move, const board_t *board) {
@@ -246,6 +263,7 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
 
     // Figure out the best move.
     // TODO: We should report the entire seq. of moves
+    // Q1: why
     move_t best_move = root->best_child()->a;
 
     std::cout << "info pv " << move_to_str(best_move) << '\n';

@@ -19,7 +19,7 @@ Node *insert_node_with_tree_policy(Node *root, State *s);
  * Simulate the game from the state of 'node' to the end, and return the
  * terminal state reward.
  */
-int rollout(Node* node, State *s);
+double rollout(Node* node, State *s);
 
 
 /**

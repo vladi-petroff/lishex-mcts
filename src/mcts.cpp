@@ -6,9 +6,11 @@
 
 #include "eval.h"
 #include "threads.h"
+#include "sgd.h"
 
 // Global evaluator
 extern eval_t eval;
+extern double winning_prob(double score);
 
 class Node {
 
@@ -38,7 +40,7 @@ public:
     Node* best_child(bool exploration_mode = true);
     void update(double res); // backprop update (increment visits etc.)
     inline bool is_terminal() {
-        return this->children.size() == 0;
+        return children.size() == 0 && is_fully_expanded();
     }
 
     inline bool is_fully_expanded() {
@@ -82,14 +84,30 @@ std::ostream& operator << (std::ostream &o, const Node* node) {
  */
 Node* select_and_insert(Node* node, State* s, Action (*policy)(movelist_t&)) {
 
+    assert(node != nullptr);
+    assert(s != nullptr);
+    assert(!node->is_terminal());
+
     // We sample actions until we find a valid one
+    LOG("Board before making move:");
+    print(s);
     Action a = policy(node->untried_moves);
+    LOG("Making move " << move_to_str(a));
+    LOG("Remaining moves are: ");
+    print_moves(node->untried_moves);
     while (!make_move(s, a)) {
         // Remove the action from untried_moves, as it is illegal
         node->untried_moves.erase(node->untried_moves.find(a));
+        if (node->untried_moves.size() == 0) { /* Edge case: if ran out of moves */
+            assert(node->is_fully_expanded());
+            return nullptr; 
+        } 
         a = policy(node->untried_moves);
+        LOG("Failed! Making move " << move_to_str(a));
     }
     node = node->insert_child(a, s);
+    LOG("Board after making move:");
+    print(s);
     return node;
 }
 
@@ -102,13 +120,16 @@ inline Action rollout_policy(movelist_t& actions) {
     return random_policy(actions);
 }
 
-constexpr int ROLLOUT_BUDGET = 10;
+constexpr int ROLLOUT_BUDGET = 2;
 
-int rollout(Node *node, State *s) {
+double rollout(Node *node, State *s) {
+
+    assert(node != nullptr);
+    assert(s != nullptr);
 
     // We limit the number of rollouts (tree height)
     int budget = ROLLOUT_BUDGET;
-    while (!node->is_terminal() || budget --> 0) {
+    while (!node->is_terminal() && budget --> 0) {
         node = select_and_insert(node, s, &rollout_policy);
     }
 
@@ -121,6 +142,8 @@ int rollout(Node *node, State *s) {
         // equivalent to a zero probability of winning)
         if (is_in_check(s, s->turn)) {
             return -oo;
+        
+        // REVIEW: Will this condition *ever* hold?
         } else if (is_in_check(s, s->turn ^ 1)) { // if opponent got mated
             return +oo;
         } else {
@@ -129,11 +152,15 @@ int rollout(Node *node, State *s) {
     }
 
     // 2) Otherwise, use the static evaluation function as a heuristic
-    return evaluate(s, &eval);
+    // Note: We convert this into a winning probability estimate with sigmoid
+    int static_eval_score = evaluate(s, &eval);
+    return winning_prob(static_eval_score);
 }
 
 
 void backprop(int reward, Node *node) {
+    assert(node != nullptr);
+
     Node *curr = node;
     while (curr != nullptr) {
         curr->update(reward);
@@ -182,7 +209,7 @@ Node *Node::best_child(bool exploration_mode) {
     // An improvement could be to keep a list of them and randomly determine ties
     //return best;
 
-    size_t random_pick = (size_t) rand() % best_children.size();
+    size_t random_pick = rand_uint64() % best_children.size();
     return best_children[random_pick];
 }
 
@@ -225,11 +252,19 @@ Action prior_prob(movelist_t& actions) {
 
 // TODO: Review this for correctness
 Node *insert_node_with_tree_policy(Node *root, State *s) {
+    assert(root != nullptr);
+
     Node *node = root;
     while (!node->is_terminal()) {
+        LOG("At node " << node);
         if (node->is_fully_expanded()) {
+            LOG("Node fully expanded!");
             node = node->best_child();
+            LOG("Best child is " << node);
+            /* Make sure the state follows the path along the tree as well */
+            make_move(s, node->a);
         } else {
+            LOG("Inserting new child");
             Node *child = select_and_insert(node, s, &prior_prob);
             return child;
         }
@@ -264,17 +299,23 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     Node* root = new Node(board, NULLMV, nullptr);
 
     // Perform the search
-    int reward;
     Node* node;
+    double reward;
     while (!search_stopped(info)) {
         // 1) Insert a new node (Selection + Expansion)
+        LOG("Inserting node...");
         node = insert_node_with_tree_policy(root, board);
+        LOG("Node " << node << " inserted");
 
         // 2) MC rollout (Simulation)
+        LOG("Performing rollout...");
         reward = rollout(node, board);
+        LOG("Done! Reward = " << reward);
 
         // 3) Backprop
+        LOG("Backpropagating results...");
         backprop(reward, node);
+        LOG("...Done!");
 
         // 4) Restore board state after traversing up to the root
         *board = root_board;

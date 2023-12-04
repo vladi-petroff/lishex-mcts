@@ -26,4 +26,6 @@ typedef struct {
 
 void tune();
 
+double winning_prob(double score);
+
 #endif // SGD_H_

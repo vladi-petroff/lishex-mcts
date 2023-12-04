@@ -13,6 +13,14 @@
 #include "search.h"
 #include "eval.h"
 
+double _K = 0.8649;
+// https://www.chessprogramming.org/Pawn_Advantage,_Win_Percentage,_and_Elo
+// Sigmoid(s)=1/(1+10^(-K/400))
+// where K is a scaling constant
+double winning_prob(double score) {
+    return 1.0 / (1.0 + std::pow(10.0, -_K*static_cast<double>(score) / 400.0));
+}
+
 namespace {
 
 // Adam parameters
@@ -35,14 +43,6 @@ constexpr int datapoints_no = 2'000'000;
 constexpr int epochs_no = 500;
 size_t batch_size = 262144;
 //int batch_size = 128;
-
-double K = 0.8649;
-// https://www.chessprogramming.org/Pawn_Advantage,_Win_Percentage,_and_Elo
-// Sigmoid(s)=1/(1+10^(-K/400))
-// where K is a scaling constant
-inline double winning_prob(double score) {
-    return 1.0 / (1.0 + std::pow(10.0, -K*static_cast<double>(score) / 400.0));
-}
 
 // Random number generator for initializing positions and velocities
 std::random_device rd;
@@ -304,7 +304,6 @@ void adam() {
         }
     }
 }
-
 
 } // namespace
 

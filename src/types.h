@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <atomic> // for search
+#include <iostream>
 
 #define NAME "Lishex-MCTS"
 #define VERSION "v0.1.0"
@@ -347,6 +348,13 @@ inline std::string move_to_str(const move_t m) {
         s.push_back(c);
     }
     return s;
+}
+
+inline void print_moves(const movelist_t& ml) {
+    for (move_t move : ml) {
+        std::cout << move_to_str(move) << ' ';
+    }
+    std::cout << '\n';
 }
 
 /*************/

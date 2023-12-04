@@ -73,6 +73,26 @@ std::ostream& operator << (std::ostream &o, const Node* node) {
     return actions[rand_uint64() % actions.size()];
 }
 
+
+/**
+ * @brief Given a node, select a *legal* action according to policy,
+ * perform the action, and insert a child node with the resulting state
+ * 
+ * @return Node* 
+ */
+Node* select_and_insert(Node* node, State* s, Action (*policy)(movelist_t&)) {
+
+    // We sample actions until we find a valid one
+    Action a = policy(node->untried_moves);
+    while (!make_move(s, a)) {
+        // Remove the action from untried_moves, as it is illegal
+        node->untried_moves.erase(node->untried_moves.find(a));
+        a = policy(node->untried_moves);
+    }
+    node = node->insert_child(a, s);
+    return node;
+}
+
 /**
  * Returns an action to play  during rollout.
  * This could be parametrized w.r.t the current state? NN?
@@ -88,13 +108,8 @@ int rollout(Node *node, State *s) {
 
     // We limit the number of rollouts (tree height)
     int budget = ROLLOUT_BUDGET;
-    Action a;
     while (!node->is_terminal() || budget --> 0) {
-        // Choose action according to rollout policy
-        a = rollout_policy(node->untried_moves);
-
-        make_move(s, a); // TODO: undo_move? Might not be legal
-        node = node->insert_child(a, s);
+        node = select_and_insert(node, s, &rollout_policy);
     }
 
     /* Leaf state's reward */
@@ -127,7 +142,7 @@ void backprop(int reward, Node *node) {
 }
 
 
-Node *Node::best_child(bool exploration_mode = true) {
+Node *Node::best_child(bool exploration_mode) {
     // Calculate UCB values for all the children and pick the highest
     double ucb;
     double best_value = static_cast<double>(INT_MIN);
@@ -137,15 +152,16 @@ Node *Node::best_child(bool exploration_mode = true) {
 
     for (Node* child : this->children) {
 
-        assert (child->visits > 0);
+        // Make sure we don't perform div-by-zero
+        // assert (child->visits > 0);
 
         // Exploitation term
-        ucb = static_cast<double>(child->total_reward) / child->visits;
+        ucb = static_cast<double>(child->total_reward) / (child->visits + 1);
 
         // Exploration term (TODO: UCB coefficient?)
         // TODO: potentially tune the CONST here (instead of sqrt(2))
         if(exploration_mode) {
-            ucb += 2 * std::sqrt(std::log(this->visits) / child->visits);
+            ucb += 2 * std::sqrt(std::log(this->visits) / (child->visits + 1));
         }
 
         if (ucb > best_value) {
@@ -160,7 +176,7 @@ Node *Node::best_child(bool exploration_mode = true) {
         
     }
 
-    assert(best != nullptr);
+    assert(best_children.size() > 0);
 
     // REVIEW: Currently, we consider the first best child encountered
     // An improvement could be to keep a list of them and randomly determine ties
@@ -206,6 +222,7 @@ Action prior_prob(movelist_t& actions) {
     return random_policy(actions);
 }
 
+
 // TODO: Review this for correctness
 Node *insert_node_with_tree_policy(Node *root, State *s) {
     Node *node = root;
@@ -213,10 +230,7 @@ Node *insert_node_with_tree_policy(Node *root, State *s) {
         if (node->is_fully_expanded()) {
             node = node->best_child();
         } else {
-            Action a = prior_prob(node->untried_moves);
-            // TODO: pseudolegal move might require a validity check
-            make_move(s, a);
-            Node *child = node->insert_child(a, s);
+            Node *child = select_and_insert(node, s, &prior_prob);
             return child;
         }
     }
@@ -243,8 +257,10 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
 
     assert(check(board));
     assert(info->state == ENGINE_SEARCHING);
+    LOG("Initial checks done");
 
     // Set up the MCTS Tree
+    const board_t root_board = *board;
     Node* root = new Node(board, NULLMV, nullptr);
 
     // Perform the search
@@ -252,24 +268,29 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     Node* node;
     while (!search_stopped(info)) {
         // 1) Insert a new node (Selection + Expansion)
-        node = insert_node_with_tree_policy(root);
+        node = insert_node_with_tree_policy(root, board);
 
         // 2) MC rollout (Simulation)
-        reward = rollout(node);
+        reward = rollout(node, board);
 
         // 3) Backprop
-        backprop(reward, node, root);
+        backprop(reward, node);
+
+        // 4) Restore board state after traversing up to the root
+        *board = root_board;
     }
 
-    // Figure out the best move.
-    // TODO: We should report the entire seq. of moves
-    // Q1: why
-    move_t best_move = root->best_child()->a;
+    // Figure out the best move at root of the tree (current game state)
+    // TODO: We should report the entire principal variation of moves by
+    // convention
+                                        // ignore the exploration term for UCB
+    move_t best_move = root->best_child(false)->a;
 
     std::cout << "info pv " << move_to_str(best_move) << '\n';
 
     /* Cleanup */
-    delete root; // should recursively delete the entire tree
+    delete root; // should recursively delete the entire tree (REVIEW)
     info->state = ENGINE_STOPPED;
     assert(check(board));
+    LOG("Cleanup checks done");
 }

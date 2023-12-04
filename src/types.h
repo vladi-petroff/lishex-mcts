@@ -23,14 +23,15 @@
 #ifndef DEBUG
 #define assert(n)
 #else
-#define assert(n) \
-if(!(n)) { \
-printf("%s - Failed ",#n); \
-printf("On %s ",__DATE__); \
-printf("At %s ",__TIME__); \
-printf("In File %s ",__FILE__); \
-printf("At Line %d\n",__LINE__); \
-exit(1);}
+#include <assert.h>
+// #define assert(n) \
+// if(!(n)) { \
+// printf("%s - Failed ",#n); \
+// printf("On %s ",__DATE__); \
+// printf("At %s ",__TIME__); \
+// printf("In File %s ",__FILE__); \
+// printf("At Line %d\n",__LINE__); \
+// exit(1);}
 #endif
 
 #ifdef DEBUG
@@ -310,6 +311,14 @@ typedef struct movelist_t {
         assert(position >= movelist && position < last);
         std::move(position + 1, last, position);
         --last;
+    }
+    scored_move_t* find(const move_t& target) {
+        for (scored_move_t* it = begin(); it != end(); ++it) {
+            if (*it == target) {
+                return it;
+            }
+        }
+        return nullptr;  // Not found
     }
     scored_move_t movelist[MAX_MOVES];
     scored_move_t* last = movelist;

@@ -2,6 +2,7 @@
 #include "threads.h"
 
 #include "eval.h" // eval_t
+#include "mcts.h"
 
 // Engine loop never writes to the state variable, only reads
 void engine_loop(board_t *board, searchinfo_t *info) {

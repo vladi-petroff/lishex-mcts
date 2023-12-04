@@ -8,10 +8,15 @@
 #include "eval.h"
 #include "threads.h"
 #include "order.h"
+#include "mcts.h"
 
 // Global evaluation struct (for multithreaded, we'll want to have a separate one for
 // each thread)
 eval_t eval;
+
+// The algorithms we will use (forward declarations)
+void alphabeta(board_t *board, searchinfo_t *info);
+//extern void MCTS_Search(board_t *board, searchinfo_t *info);
 
 
 namespace {
@@ -342,6 +347,12 @@ int quiescence(int α, int β, board_t *board, searchinfo_t *info, stack_t *stac
 
 /* Search the tree starting from the root node (current board state) */
 void search(board_t *board, searchinfo_t *info) {
+    //alphabeta(board, info);
+    MCTS_Search(board, info);
+}
+
+
+void alphabeta(board_t *board, searchinfo_t *info) {
     assert(check(board));
 
     move_t best_move = NULLMV;

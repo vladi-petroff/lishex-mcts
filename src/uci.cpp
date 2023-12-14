@@ -151,7 +151,7 @@ void parse_go(board_t *board, searchinfo_t *info, std::istringstream &iss) {
     // @TODO: Simple time management based on
     // E[# halfmoves until end of game | material on board]
     if (movetime != -1) {
-      time = movetime;
+      info->time = time = movetime;
       movestogo = 1;
     }
 

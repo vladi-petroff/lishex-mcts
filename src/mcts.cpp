@@ -274,22 +274,136 @@ Node *insert_node_with_tree_policy(Node *root, State *s) {
     return node;
 }
 
+/**
+ * @brief Given the MCTS root and current board state, find a node 
+ * within the tree to expand
+ * 
+ * @param root Root of the game tree
+ * @param s Board state at the root
+ * @return Node* The node selected for expansion
+ */
+Node *select(Node *root, State *s) {
+    assert(root != nullptr);
 
-// Recursively free the subtree rooted at 'root'
-static void free_tree(Node *root) {
-    for (Node *child : root->children) {
-        free_tree(child);
+    Node *node = root;
+    while (!node->is_terminal()) {
+        if (node->is_fully_expanded()) {
+            node = node->best_child();
+            /* Make sure the state follows the path along the tree as well */
+            make_move(s, node->a);
+        } else {
+            return node;
+        }
     }
-    delete root;
+    return node;
 }
 
-/* REVIEW:
-    
+/**
+ * @brief Given a node and corresponding state, find and play
+ * a legal action according to policy. Mutates the board state @param s
+ * @param node Node to perform the action in
+ * @param s Board state corresponding to @param node
+ * @return Action played on success, NULLMV otherwise.
+ */
+Action play_legal(State *s, Action (*policy)(movelist_t&)) {
+    // A list of *pseudo*legal moves
+    movelist_t moves;
+    generate_moves(s, &moves);
+
+    // Pick a move according to policy 
+    // (REVIEW: We might want the policy to take in the state too?)
+    Action a = policy(moves);
+    while (!make_move(s, a)) {
+        // Remove the action from the list, as it is illegal
+        moves.erase(moves.find(a));
+        if (moves.size() <= 0) {
+            // Ran out of moves -> can't play any legal action from state s
+            return NULLMV;
+        }
+        a = policy(moves);
+    }
+    return a;
+}
+
+/**
+ * @brief Attempts to expand node. If successful, returns the new child,
+ * and otherwise the input node.
+ * @param node Pointer to a node to be expanded
+ * @param s Current board state corresponding to @param node
+ * @return Node* New child if successful, @param node otherwise
+ */
+Node *expand(Node *node, State *s) {
+    assert(node != nullptr);
+    assert(s != nullptr);
+
+    // REVIEW: Redundant is_fully_expanded check?
+    if (node->is_terminal() || node->is_fully_expanded()) {
+        return node;
+    }
+
+    // Attempt to expand the node
+    Action a = play_legal(s, &prior_prob); // Note: mutates s
+    if (a != NULLMV) 
+        return node->insert_child(a, s);
+
+    return node;
+}
+
+/**
+ * @brief Perform a simulation (playout).
+ *  Like rollout(), but doesn't insert any new nodes into the tree
+ * @param node Node to start the playout from
+ * @param s Board state corresponding to @param node
+ * @return double The reward, r \in [0, 1] (REVIEW: For which side?)
+ */
+double simulate(State *s) {
+    assert(node != nullptr);
+    assert(s != nullptr);
+
+    // Perform rollout according to chosen policy (we use a random one for now)
+    Action a;
+    int budget = ROLLOUT_BUDGET;
+    do {
+        a = play_legal(s, &random_policy);
+    } while (a != NULLMV && budget --> 0);
+
+    // 1) If terminal, check who won the rollout
+    if (a == NULLMV) {
+        // If side to turn (us?) is in check and node is terminal (no moves),
+        // we've been mated (we get a centipawn score of negative infinity,
+        // equivalent to a zero probability of winning)
+        // REVIEW: Should we return -oo or 0?
+        if (is_in_check(s, s->turn)) {
+            return 0;
+        
+        // REVIEW: Will this condition *ever* hold?
+        } else if (is_in_check(s, s->turn ^ 1)) { // if opponent got mated
+            return 1;
+        } else {
+            return 0.5; // stalemate (i.e. draw)
+        }
+    }
+
+    // 2) Otherwise, use the static evaluation function as a heuristic
+    // Note: We convert this centipawn score into a winning probability 
+    // estimate with sigmoid
+    int static_eval_score = evaluate(s, &eval);
+    return winning_prob(static_eval_score);
+}
+
+/*  
+    REVIEW:
     Optimization idea: Instead of rebuilding the entire tree everyime
     MCTS_Search() is called, we keep the old tree around (globally?). Depending
     on what moves actually get played, we delete all irrelevant subtrees and
     keep the relevant one.
 */
+
+/**
+ * @brief Main MCTS search function
+ * @param board Board state to start the search from
+ * @param info search info including time to move, depth, etc.
+ */
 void MCTS_Search(board_t* board, searchinfo_t *info) {
 
     assert(check(board));
@@ -304,30 +418,19 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     Node* node;
     double reward;
     while (!search_stopped(info)) {
-        // 1) Insert a new node (Selection + Expansion)
-        LOG("Trying to insert node...");
-        node = insert_node_with_tree_policy(root, board);
+        // 1) Selection
+        node = select(root, board);
 
-        // If failed to insert a node, just retry (the new UCB scores should now guide us towards a different path?)
-        // virtual ... ?
-        if (!node) {
-            *board = root_board;
-            continue;
-        }
+        // 2) Expansion (TODO: Skip this step when OOM)
+        node = expand(node, board);
 
-        LOG("Node " << node << " inserted");
+        // 3) Simulation
+        reward = simulate(board);
 
-        // 2) MC rollout (Simulation)
-        LOG("Performing rollout...");
-        reward = rollout(node, board);
-        LOG("Done! Reward = " << reward);
-
-        // 3) Backprop
-        LOG("Backpropagating results...");
+        // 4) Backpropagation
         backprop(reward, node);
-        LOG("...Done!");
 
-        // 4) Restore board state after traversing up to the root
+        // 5) Restore board state after traversing up to the root
         *board = root_board;
     }
 

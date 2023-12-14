@@ -13,6 +13,10 @@
 extern eval_t eval;
 extern double winning_prob(double score);
 
+// Constants (TODO: Tune with self-play?)
+constexpr double UCB_CONST = 0.7;
+constexpr int ROLLOUT_BUDGET = 10;
+
 class Node {
 
     // Search should have access to all private members
@@ -39,6 +43,7 @@ public:
 
     Node* insert_child(move_t mv, const board_t* board);
     Node* best_child(bool exploration_mode = true);
+    double UCB(bool exploration_mode = true);
     void update(double res); // backprop update (increment visits etc.)
     inline bool is_terminal() {
         return children.size() == 0 && is_fully_expanded();
@@ -56,7 +61,7 @@ public:
     Action a;
     movelist_t untried_moves;
 private:
-    int total_reward;
+    double total_reward;
     int visits;
 };
 
@@ -121,8 +126,6 @@ inline Action rollout_policy(movelist_t& actions) {
     return random_policy(actions);
 }
 
-constexpr int ROLLOUT_BUDGET = 2;
-
 double rollout(Node *node, State *s) {
 
     assert(node != nullptr);
@@ -164,7 +167,12 @@ double rollout(Node *node, State *s) {
 }
 
 
-void backprop(int reward, Node *node) {
+/** 
+ * @brief Backpropagate the result of a playout up to the root of the tree
+ * @param double reward achieved during last rollout
+ * @param Node* Pointer to the selected node from which the rollout was performed
+ */
+void backprop(double reward, Node *node) {
     assert(node != nullptr);
 
     Node *curr = node;
@@ -172,6 +180,15 @@ void backprop(int reward, Node *node) {
         curr->update(reward);
         curr = curr->parent;
     }
+}
+
+double Node::UCB(bool exploration_mode) {
+    // Avoid div-by-zero
+    double ucb = static_cast<double>(total_reward) / (visits + 1);
+    if (exploration_mode)
+        ucb += UCB_CONST * std::sqrt(std::log(parent->visits) / (visits + 1));
+
+    return ucb;
 }
 
 
@@ -184,16 +201,7 @@ Node *Node::best_child(bool exploration_mode) {
 
     for (Node* child : this->children) {
 
-        // assert (child->visits > 0);
-
-        // Exploitation term (make sure we don't perform div-by-zero)
-        ucb = static_cast<double>(child->total_reward) / (child->visits + 1);
-
-        // Exploration term (TODO: UCB coefficient?)
-        // TODO: potentially tune the CONST here (instead of sqrt(2))
-        if (exploration_mode) {
-            ucb += 2 * std::sqrt(std::log(this->visits) / (child->visits + 1));
-        }
+        ucb = child->UCB(exploration_mode);
 
         if (ucb > best_value) {
             best_value = ucb;
@@ -228,8 +236,8 @@ Node *Node::insert_child(move_t move, const board_t *board) {
     return child;
 }
 
-void Node::update(double result) {
-    this->total_reward += result;
+void Node::update(double reward) {
+    this->total_reward += reward;
     ++this->visits;
 }
 
@@ -284,6 +292,7 @@ Node *insert_node_with_tree_policy(Node *root, State *s) {
  */
 Node *select(Node *root, State *s) {
     assert(root != nullptr);
+    assert(s != nullptr);
 
     Node *node = root;
     while (!node->is_terminal()) {
@@ -301,26 +310,32 @@ Node *select(Node *root, State *s) {
 /**
  * @brief Given a node and corresponding state, find and play
  * a legal action according to policy. Mutates the board state @param s
- * @param node Node to perform the action in
  * @param s Board state corresponding to @param node
+ * @param policy A policy function 
+ * @param moves (OPTIONAL) Allowed moves
  * @return Action played on success, NULLMV otherwise.
  */
-Action play_legal(State *s, Action (*policy)(movelist_t&)) {
-    // A list of *pseudo*legal moves
-    movelist_t moves;
-    generate_moves(s, &moves);
+Action play_legal(State *s, Action (*policy)(movelist_t&), movelist_t *moves = NULL) {
+
+    if (!moves) {
+        moves = (movelist_t*)alloca(sizeof(movelist_t));
+        // A list of *pseudo*legal moves
+        generate_moves(s, moves);
+    }
+
+    movelist_t& legal = *moves;
 
     // Pick a move according to policy 
     // (REVIEW: We might want the policy to take in the state too?)
-    Action a = policy(moves);
+    Action a = policy(legal);
     while (!make_move(s, a)) {
         // Remove the action from the list, as it is illegal
-        moves.erase(moves.find(a));
-        if (moves.size() <= 0) {
+        legal.erase(legal.find(a));
+        if (legal.size() <= 0) {
             // Ran out of moves -> can't play any legal action from state s
             return NULLMV;
         }
-        a = policy(moves);
+        a = policy(legal);
     }
     return a;
 }
@@ -341,8 +356,8 @@ Node *expand(Node *node, State *s) {
         return node;
     }
 
-    // Attempt to expand the node
-    Action a = play_legal(s, &prior_prob); // Note: mutates s
+    // Attempt to expand the node (note: might mutate s)
+    Action a = play_legal(s, &prior_prob, &node->untried_moves);
     if (a != NULLMV) 
         return node->insert_child(a, s);
 
@@ -357,7 +372,6 @@ Node *expand(Node *node, State *s) {
  * @return double The reward, r \in [0, 1] (REVIEW: For which side?)
  */
 double simulate(State *s) {
-    assert(node != nullptr);
     assert(s != nullptr);
 
     // Perform rollout according to chosen policy (we use a random one for now)
@@ -413,6 +427,7 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     // Set up the MCTS Tree
     const board_t root_board = *board;
     Node* root = new Node(board, NULLMV, nullptr);
+    LOG("Root is at " << root);
 
     // Perform the search
     Node* node;
@@ -420,6 +435,7 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     while (!search_stopped(info)) {
         // 1) Selection
         node = select(root, board);
+        LOG("Selected '" << to_fen(board) << "' for expansion at " << node);
 
         // 2) Expansion (TODO: Skip this step when OOM)
         node = expand(node, board);
@@ -440,7 +456,33 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
                                         // ignore the exploration term for UCB
     move_t best_move = root->best_child(false)->a;
 
-    std::cout << "info pv " << move_to_str(best_move) << '\n';
+    std::cout << "bestmove " << move_to_str(best_move) << '\n';
+
+    #ifdef DEBUG
+    std::cout << "info string UCB scores at the root: ";
+    for (Node* child : root->children) {
+        std::cout << move_to_str(child->a) << ':' << child->UCB(false) << ' ';
+    }
+    std::cout << std::endl;
+
+    std::cout << "info string w/ exploration term on: ";
+    for (Node* child : root->children) {
+        std::cout << move_to_str(child->a) << ':' << child->UCB(true) << ' ';
+    }
+    std::cout << std::endl;
+
+    std::cout << "info string visits at root: ";
+    for (Node* child : root->children) {
+        std::cout << child->visits << ' ';
+    }
+    std::cout << std::endl;
+
+    std::cout << "info string accumulated reward at root: ";
+    for (Node* child : root->children) {
+        std::cout << child->total_reward << ' ';
+    }
+    std::cout << std::endl;
+    #endif
 
     /* Cleanup */
     delete root; // should recursively delete the entire tree (REVIEW)

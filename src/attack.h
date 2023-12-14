@@ -35,11 +35,11 @@ typedef struct magic_t {
     uint32_t shift;
     // Function returning the key into lookup table
     inline uint32_t key(const bb_t occupied) {
-        if constexpr (bmi2) {
-            return static_cast<uint32_t>(_pext_u64(occupied, mask));
-        } else {
-            return ((occupied & mask) * magic) >> shift;
-        }
+        #ifdef __BMI2__
+        return static_cast<uint32_t>(_pext_u64(occupied, mask));
+        #else
+        return ((occupied & mask) * magic) >> shift;
+        #endif
     }
 } magic_t;
 

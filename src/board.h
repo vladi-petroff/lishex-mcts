@@ -63,6 +63,8 @@ extern void setup(board_t *board, const std::string& fen);
 
 extern void print(const board_t *board, bool verbose = true);
 
+std::string to_fen(const board_t *board);
+
 extern void test(board_t *board);
 
 extern uint64_t generate_pos_key(const board_t *board);

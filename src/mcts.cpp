@@ -7,6 +7,7 @@
 #include "eval.h"
 #include "threads.h"
 #include "sgd.h"
+#include "board.h"
 
 // Global evaluator
 extern eval_t eval;
@@ -80,7 +81,7 @@ std::ostream& operator << (std::ostream &o, const Node* node) {
  * @brief Given a node, select a *legal* action according to policy,
  * perform the action, and insert a child node with the resulting state
  * 
- * @return Node* 
+ * @return Node* or nullptr if no legal action could be taken
  */
 Node* select_and_insert(Node* node, State* s, Action (*policy)(movelist_t&)) {
 
@@ -99,7 +100,7 @@ Node* select_and_insert(Node* node, State* s, Action (*policy)(movelist_t&)) {
         // Remove the action from untried_moves, as it is illegal
         node->untried_moves.erase(node->untried_moves.find(a));
         if (node->untried_moves.size() == 0) { /* Edge case: if ran out of moves */
-            assert(node->is_fully_expanded());
+            LOG("We ran out of moves in this state!");
             return nullptr; 
         } 
         a = policy(node->untried_moves);
@@ -112,7 +113,7 @@ Node* select_and_insert(Node* node, State* s, Action (*policy)(movelist_t&)) {
 }
 
 /**
- * Returns an action to play  during rollout.
+ * Returns an action to play during rollout.
  * This could be parametrized w.r.t the current state? NN?
  * For Pure MCTS we use random rollouts
 */
@@ -130,7 +131,12 @@ double rollout(Node *node, State *s) {
     // We limit the number of rollouts (tree height)
     int budget = ROLLOUT_BUDGET;
     while (!node->is_terminal() && budget --> 0) {
-        node = select_and_insert(node, s, &rollout_policy);
+        // Note: select_and_insert can return a nullptr
+        Node *child = select_and_insert(node, s, &rollout_policy);
+        if (child == nullptr) {
+            break;
+        }
+        node = child;
     }
 
     /* Leaf state's reward */
@@ -174,15 +180,13 @@ Node *Node::best_child(bool exploration_mode) {
     double ucb;
     double best_value = static_cast<double>(INT_MIN);
 
-    //Node *best;
     std::vector<Node*> best_children;
 
     for (Node* child : this->children) {
 
-        // Make sure we don't perform div-by-zero
         // assert (child->visits > 0);
 
-        // Exploitation term
+        // Exploitation term (make sure we don't perform div-by-zero)
         ucb = static_cast<double>(child->total_reward) / (child->visits + 1);
 
         // Exploration term (TODO: UCB coefficient?)
@@ -256,11 +260,11 @@ Node *insert_node_with_tree_policy(Node *root, State *s) {
 
     Node *node = root;
     while (!node->is_terminal()) {
-        LOG("At node " << node);
+        LOG("At node " << to_fen(s) << " @ " << node);
         if (node->is_fully_expanded()) {
             LOG("Node fully expanded!");
             node = node->best_child();
-            LOG("Best child is " << node);
+            LOG("Best child is " << move_to_str(node->a) << " @ " << node);
             /* Make sure the state follows the path along the tree as well */
             make_move(s, node->a);
         } else {
@@ -303,8 +307,14 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     double reward;
     while (!search_stopped(info)) {
         // 1) Insert a new node (Selection + Expansion)
-        LOG("Inserting node...");
+        LOG("Trying to insert node...");
         node = insert_node_with_tree_policy(root, board);
+
+        // If failed to insert a node, just retry (the new UCB scores should now guide us towards a different path?)
+        // virtual ... ?
+        if (!node)
+            continue;
+
         LOG("Node " << node << " inserted");
 
         // 2) MC rollout (Simulation)

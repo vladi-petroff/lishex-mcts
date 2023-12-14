@@ -25,14 +25,15 @@
 #define assert(n)
 #else
 #include <assert.h>
-// #define assert(n) \
-// if(!(n)) { \
-// printf("%s - Failed ",#n); \
-// printf("On %s ",__DATE__); \
-// printf("At %s ",__TIME__); \
-// printf("In File %s ",__FILE__); \
-// printf("At Line %d\n",__LINE__); \
-// exit(1);}
+#define assert(n) \
+if(!(n)) { \
+printf("%s - Failed ",#n); \
+printf("On %s ",__DATE__); \
+printf("At %s ",__TIME__); \
+printf("In File %s ",__FILE__); \
+printf("At Line %d\n",__LINE__); \
+*((char*) 0) = 0; \
+exit(1);}
 #endif
 
 #ifdef DEBUG

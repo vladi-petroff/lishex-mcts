@@ -191,14 +191,12 @@ Node *Node::best_child(bool exploration_mode) {
 
         // Exploration term (TODO: UCB coefficient?)
         // TODO: potentially tune the CONST here (instead of sqrt(2))
-        if(exploration_mode) {
+        if (exploration_mode) {
             ucb += 2 * std::sqrt(std::log(this->visits) / (child->visits + 1));
         }
 
         if (ucb > best_value) {
             best_value = ucb;
-
-            //best = child;
             best_children.clear();
             best_children.push_back(child);
         } else if (ucb == best_value) {
@@ -209,10 +207,7 @@ Node *Node::best_child(bool exploration_mode) {
 
     assert(best_children.size() > 0);
 
-    // REVIEW: Currently, we consider the first best child encountered
-    // An improvement could be to keep a list of them and randomly determine ties
-    //return best;
-
+    // Randomly determine ties between best children (REVIEW: This could be improved)
     size_t random_pick = rand_uint64() % best_children.size();
     return best_children[random_pick];
 }
@@ -266,7 +261,10 @@ Node *insert_node_with_tree_policy(Node *root, State *s) {
             node = node->best_child();
             LOG("Best child is " << move_to_str(node->a) << " @ " << node);
             /* Make sure the state follows the path along the tree as well */
-            make_move(s, node->a);
+            if (make_move(s, node->a) == false) {
+                LOG("Node " << s << " stores invalid child\n");
+                *((char*) 0) = 0;
+            } 
         } else {
             LOG("Inserting new child");
             Node *child = select_and_insert(node, s, &prior_prob);
@@ -312,8 +310,10 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
 
         // If failed to insert a node, just retry (the new UCB scores should now guide us towards a different path?)
         // virtual ... ?
-        if (!node)
+        if (!node) {
+            *board = root_board;
             continue;
+        }
 
         LOG("Node " << node << " inserted");
 

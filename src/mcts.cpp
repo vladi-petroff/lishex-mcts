@@ -12,11 +12,10 @@
 
 // Global evaluator
 extern eval_t eval;
-extern double winning_prob(double score);
 
 // Constants (TODO: Tune with self-play?)
 constexpr double UCB_CONST = 0.7; 
-constexpr int ROLLOUT_BUDGET = 10;
+constexpr int ROLLOUT_BUDGET = 15;
 constexpr size_t DEFAULT_ARENA_MB = 2048; /* Default size of the arena in MB */
 
 // Arena allocator 
@@ -33,6 +32,7 @@ public:
         : parent(parent_node)
         , a(mv)
         , total_reward(0)
+        , avg(0)
         , visits(0)
     {
         // Generate all possible actions (chess moves) from this node
@@ -67,6 +67,7 @@ public:
     movelist_t untried_moves;
 private:
     double total_reward;
+    double avg;
     int visits;
 };
 
@@ -177,21 +178,31 @@ double rollout(Node *node, State *s) {
  * @brief Backpropagate the result of a playout up to the root of the tree
  * @param double reward achieved during last rollout
  * @param Node* Pointer to the selected node from which the rollout was performed
+ * @param int Color of the root player
+ * @param int Color of the node player
  */
-void backprop(double reward, Node *node) {
+void backprop(double reward, Node *node, int root_color, int color) {
     assert(node != nullptr);
+
+    // Same color: +
+    // Diff color: -
+
+    // Flip the reward if node is not the side to move
+    reward *= 2*(color == root_color)-1;
 
     Node *curr = node;
     while (curr != nullptr) {
         curr->update(reward);
+        reward *= -1;
         curr = curr->parent;
     }
 }
 
 double Node::UCB(bool exploration_mode) {
-    // Avoid div-by-zero
-    double ucb = static_cast<double>(total_reward) / (visits + 1);
+    // double ucb = static_cast<double>(total_reward) / (visits + 1);
+    double ucb = this->avg;
     if (exploration_mode)
+        // Avoid div-by-zero
         ucb += UCB_CONST * std::sqrt(std::log(parent->visits) / (visits + 1));
 
     return ucb;
@@ -202,20 +213,15 @@ Node *Node::best_child(bool exploration_mode) {
     // Calculate UCB values for all the children and pick the highest
     double ucb;
     double best_value = static_cast<double>(INT_MIN);
-
     Node *best = nullptr;
 
     for (Node* child : this->children) {
-
         ucb = child->UCB(exploration_mode);
-
         if (ucb > best_value) {
             best_value = ucb;
             best = child;
         }
-        
     }
-
     assert(best != nullptr);
 
     // REVIEW: Randomly determine ties between best children?
@@ -242,9 +248,12 @@ Node *Node::insert_child(move_t move, const board_t *board) {
     return child;
 }
 
+// See 184 Lecture slides on AlphaZero
 void Node::update(double reward) {
+    double n = this->visits;
+    this->avg = (n/(n+1)) * this->avg + (1.0 / (n+1)) * reward;
+    this->visits++;
     this->total_reward += reward;
-    ++this->visits;
 }
 
 
@@ -305,7 +314,7 @@ Node *select(Node *root, State *s) {
     Node *node = root;
     while (!node->is_terminal()) {
         if (node->is_fully_expanded()) {
-            node = node->best_child();
+            node = node->best_child(true);
             /* Make sure the state follows the path along the tree as well */
             make_move(s, node->a);
         } else {
@@ -379,10 +388,13 @@ Node *expand(Node *node, State *s, searchinfo_t *info) {
  * @param node Node to start the playout from
  * @param s Board state corresponding to @param node
  * @param int The root player's color (WHITE or BLACK)
- * @return double The reward, r \in [0, 1] for the root player
+ * @return double The reward, r \in [0, 1] for the side to move in state s
  */
-double simulate(State *s, int color) {
+double simulate(State *s) {
     assert(s != nullptr);
+
+    // We'll return the reward for the player to move in state s
+    int color = s->turn;
 
     // Perform rollout according to chosen policy (we use a random one for now)
     Action a;
@@ -398,21 +410,21 @@ double simulate(State *s, int color) {
         // If after rollout root player is in check and node is terminal (no moves),
         // we've been mated        
         if (is_in_check(s, color)) {
-            return 0; 
+            return -1; 
         } else if (is_in_check(s, color ^ 1)) { // if opponent got mated
             return 1;
         } else {
-            return 0.5; // stalemate (i.e. draw)
+            return 0; // stalemate (i.e. draw)
         }
     }
     /* 2) Otherwise, use the evaluation function as a heuristic Note 1: This
     evaluation is from the POV of the side-to-move at the *leaf node* we reached
     during rollout. We take care to flip it appropriately to correspond to the
-    evaluation from the POV of the root node player. Note 2: We convert this
+    evaluation from the POV of the root state s player. Note 2: We convert this
     centipawn score into a winning probability estimate with sigmoid */
     int static_eval_score = evaluate(s, &eval);
     static_eval_score *= 2*(s->turn == color)-1;
-    return winning_prob(static_eval_score);
+    return 2 * winning_prob(static_eval_score) - 1;
 }
 
 
@@ -460,7 +472,8 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     info->clear();
     board->ply = 0;
     const board_t root_board = *board; // Root board
-    int color = board->turn; // Side to move at the root node (White or Black)
+    int root_color = board->turn; // Side to move at the root node (White or Black)
+    int color = root_color;
 
     // Set up the MCTS Tree
     // Node* root = new Node(board, NULLMV, nullptr);
@@ -481,10 +494,11 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
         node = expand(node, board, info);
 
         // 3) Simulation
-        reward = simulate(board, color);
+        color = board->turn;
+        reward = simulate(board);
 
         // 4) Backpropagation
-        backprop(reward, node);
+        backprop(reward, node, root_color, color);
 
         // 5) Update client with current search information
         print_MCTS_info(root, info);

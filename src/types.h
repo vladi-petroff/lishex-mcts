@@ -291,6 +291,7 @@ typedef struct scored_move_t {
     bool operator==(const scored_move_t& m) { return move == m.move; }
     // Conversion operator, returning the move as a move_t
     operator move_t() const { return move; }
+    inline int32_t get_score() const { return score; }
 } scored_move_t;
 
 // Move list structure

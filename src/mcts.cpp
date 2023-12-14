@@ -8,14 +8,19 @@
 #include "threads.h"
 #include "sgd.h"
 #include "board.h"
+#include "arena.h"
 
 // Global evaluator
 extern eval_t eval;
 extern double winning_prob(double score);
 
 // Constants (TODO: Tune with self-play?)
-constexpr double UCB_CONST = 0.7;
+constexpr double UCB_CONST = 0.7; 
 constexpr int ROLLOUT_BUDGET = 10;
+constexpr size_t DEFAULT_ARENA_MB = 256; /* Default size of the arena in MB */
+
+// Arena allocator 
+Arena arena(DEFAULT_ARENA_MB);
 
 class Node {
 
@@ -37,7 +42,7 @@ public:
     // Destructor
     ~Node() {
         for (Node* child : this->children) {
-            delete child;
+            child->~Node();
         }
     }
 
@@ -221,7 +226,9 @@ Node *Node::best_child(bool exploration_mode) {
 }
 
 Node *Node::insert_child(move_t move, const board_t *board) {
-    Node *child = new Node(board, move, this);
+    // Node *child = new Node(board, move, this);
+    void *memory = arena.allocate(sizeof(Node));
+    Node *child = memory ? new (memory) Node(board, move, this) : nullptr;
 
     // Mark move as tried
     for (auto it = this->untried_moves.begin(); it != this->untried_moves.end(); ++it) {
@@ -312,30 +319,22 @@ Node *select(Node *root, State *s) {
  * a legal action according to policy. Mutates the board state @param s
  * @param s Board state corresponding to @param node
  * @param policy A policy function 
- * @param moves (OPTIONAL) Allowed moves
+ * @param moves Allowed moves
  * @return Action played on success, NULLMV otherwise.
  */
-Action play_legal(State *s, Action (*policy)(movelist_t&), movelist_t *moves = NULL) {
-
-    if (!moves) {
-        moves = (movelist_t*)alloca(sizeof(movelist_t));
-        // A list of *pseudo*legal moves
-        generate_moves(s, moves);
-    }
-
-    movelist_t& legal = *moves;
+Action play_legal(State *s, Action (*policy)(movelist_t&), movelist_t& moves) {
 
     // Pick a move according to policy 
     // (REVIEW: We might want the policy to take in the state too?)
-    Action a = policy(legal);
+    Action a = policy(moves);
     while (!make_move(s, a)) {
         // Remove the action from the list, as it is illegal
-        legal.erase(legal.find(a));
-        if (legal.size() <= 0) {
+        moves.erase(moves.find(a));
+        if (moves.size() <= 0) {
             // Ran out of moves -> can't play any legal action from state s
             return NULLMV;
         }
-        a = policy(legal);
+        a = policy(moves);
     }
     return a;
 }
@@ -352,12 +351,17 @@ Node *expand(Node *node, State *s) {
     assert(s != nullptr);
 
     // REVIEW: Redundant is_fully_expanded check?
-    if (node->is_terminal() || node->is_fully_expanded()) {
+    if (node->is_terminal() || node->is_fully_expanded())
+        return node;
+
+    // Check if can expand:
+    if (!arena.has_space(sizeof(Node))) {
+        LOG("Arena ran out of space!\n");
         return node;
     }
 
     // Attempt to expand the node (note: might mutate s)
-    Action a = play_legal(s, &prior_prob, &node->untried_moves);
+    Action a = play_legal(s, &prior_prob, node->untried_moves);
     if (a != NULLMV) 
         return node->insert_child(a, s);
 
@@ -376,9 +380,11 @@ double simulate(State *s) {
 
     // Perform rollout according to chosen policy (we use a random one for now)
     Action a;
+    movelist_t moves;
     int budget = ROLLOUT_BUDGET;
     do {
-        a = play_legal(s, &random_policy);
+        generate_moves(s, &moves);
+        a = play_legal(s, &random_policy, moves);
     } while (a != NULLMV && budget --> 0);
 
     // 1) If terminal, check who won the rollout
@@ -426,7 +432,11 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
 
     // Set up the MCTS Tree
     const board_t root_board = *board;
-    Node* root = new Node(board, NULLMV, nullptr);
+    // Node* root = new Node(board, NULLMV, nullptr);
+    // TODO: Cleanup
+    arena.reset();
+    void *memory = arena.allocate(sizeof(Node));
+    Node *root = memory ? new (memory) Node(board, NULLMV, nullptr) : nullptr;
     LOG("Root is at " << root);
 
     // Perform the search
@@ -485,7 +495,8 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     #endif
 
     /* Cleanup */
-    delete root; // should recursively delete the entire tree (REVIEW)
+    root->~Node(); // should recursively delete the entire tree (REVIEW)
+    arena.reset();
     info->state = ENGINE_STOPPED;
     assert(check(board));
     LOG("Cleanup checks done");

@@ -27,7 +27,7 @@ endif
 ### Sanitizers
 sanitize ?= no
 ifeq ($(sanitize),yes)
-	CXXFLAGS += -fsanitize=thread
+	CXXFLAGS += -fsanitize=address 
 endif
 
 ### Optimizations (on by default)

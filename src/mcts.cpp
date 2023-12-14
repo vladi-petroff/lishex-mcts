@@ -17,7 +17,7 @@ extern double winning_prob(double score);
 // Constants (TODO: Tune with self-play?)
 constexpr double UCB_CONST = 0.7; 
 constexpr int ROLLOUT_BUDGET = 10;
-constexpr size_t DEFAULT_ARENA_MB = 256; /* Default size of the arena in MB */
+constexpr size_t DEFAULT_ARENA_MB = 2048; /* Default size of the arena in MB */
 
 // Arena allocator 
 Arena arena(DEFAULT_ARENA_MB);
@@ -131,6 +131,7 @@ inline Action rollout_policy(movelist_t& actions) {
     return random_policy(actions);
 }
 
+// Ignore
 double rollout(Node *node, State *s) {
 
     assert(node != nullptr);
@@ -202,7 +203,7 @@ Node *Node::best_child(bool exploration_mode) {
     double ucb;
     double best_value = static_cast<double>(INT_MIN);
 
-    std::vector<Node*> best_children;
+    Node *best = nullptr;
 
     for (Node* child : this->children) {
 
@@ -210,19 +211,17 @@ Node *Node::best_child(bool exploration_mode) {
 
         if (ucb > best_value) {
             best_value = ucb;
-            best_children.clear();
-            best_children.push_back(child);
-        } else if (ucb == best_value) {
-            best_children.push_back(child);
+            best = child;
         }
         
     }
 
-    assert(best_children.size() > 0);
+    assert(best != nullptr);
 
-    // Randomly determine ties between best children (REVIEW: This could be improved)
-    size_t random_pick = rand_uint64() % best_children.size();
-    return best_children[random_pick];
+    // REVIEW: Randomly determine ties between best children?
+    // Note: We'll rarely run into a scenario where two children have
+    // the same UCB score due to floating point imprecision
+    return best;
 }
 
 Node *Node::insert_child(move_t move, const board_t *board) {
@@ -292,6 +291,8 @@ Node *insert_node_with_tree_policy(Node *root, State *s) {
 /**
  * @brief Given the MCTS root and current board state, find a node 
  * within the tree to expand
+ * @todo We might want to exploit more here instead of fully expanding each 
+ * node
  * 
  * @param root Root of the game tree
  * @param s Board state at the root
@@ -344,9 +345,10 @@ Action play_legal(State *s, Action (*policy)(movelist_t&), movelist_t& moves) {
  * and otherwise the input node.
  * @param node Pointer to a node to be expanded
  * @param s Current board state corresponding to @param node
+ * @param info Search information including # of nodes created in tree
  * @return Node* New child if successful, @param node otherwise
  */
-Node *expand(Node *node, State *s) {
+Node *expand(Node *node, State *s, searchinfo_t *info) {
     assert(node != nullptr);
     assert(s != nullptr);
 
@@ -362,20 +364,24 @@ Node *expand(Node *node, State *s) {
 
     // Attempt to expand the node (note: might mutate s)
     Action a = play_legal(s, &prior_prob, node->untried_moves);
-    if (a != NULLMV) 
+    if (a != NULLMV) {
+        ++info->nodes;
+        info->seldepth = std::max(info->seldepth, s->ply);
         return node->insert_child(a, s);
+    }
 
     return node;
 }
 
 /**
- * @brief Perform a simulation (playout).
+ * @brief Perform a light rollout simulation (playout).
  *  Like rollout(), but doesn't insert any new nodes into the tree
  * @param node Node to start the playout from
  * @param s Board state corresponding to @param node
- * @return double The reward, r \in [0, 1] (REVIEW: For which side?)
+ * @param int The root player's color (WHITE or BLACK)
+ * @return double The reward, r \in [0, 1] for the root player
  */
-double simulate(State *s) {
+double simulate(State *s, int color) {
     assert(s != nullptr);
 
     // Perform rollout according to chosen policy (we use a random one for now)
@@ -389,26 +395,46 @@ double simulate(State *s) {
 
     // 1) If terminal, check who won the rollout
     if (a == NULLMV) {
-        // If side to turn (us?) is in check and node is terminal (no moves),
-        // we've been mated (we get a centipawn score of negative infinity,
-        // equivalent to a zero probability of winning)
-        // REVIEW: Should we return -oo or 0?
-        if (is_in_check(s, s->turn)) {
-            return 0;
-        
-        // REVIEW: Will this condition *ever* hold?
-        } else if (is_in_check(s, s->turn ^ 1)) { // if opponent got mated
+        // If after rollout root player is in check and node is terminal (no moves),
+        // we've been mated        
+        if (is_in_check(s, color)) {
+            return 0; 
+        } else if (is_in_check(s, color ^ 1)) { // if opponent got mated
             return 1;
         } else {
             return 0.5; // stalemate (i.e. draw)
         }
     }
-
-    // 2) Otherwise, use the static evaluation function as a heuristic
-    // Note: We convert this centipawn score into a winning probability 
-    // estimate with sigmoid
+    /* 2) Otherwise, use the evaluation function as a heuristic Note 1: This
+    evaluation is from the POV of the side-to-move at the *leaf node* we reached
+    during rollout. We take care to flip it appropriately to correspond to the
+    evaluation from the POV of the root node player. Note 2: We convert this
+    centipawn score into a winning probability estimate with sigmoid */
     int static_eval_score = evaluate(s, &eval);
+    static_eval_score *= 2*(s->turn == color)-1;
     return winning_prob(static_eval_score);
+}
+
+
+/**
+ * @brief Writes search information to stdout
+ * @param root Root node of the MCTS search tree
+ * @param searchinfo_t* Search information including e.g. # of nodes in the tree
+ */
+void print_MCTS_info(Node *root, searchinfo_t *info) {
+    // We only want to update periodically
+    if (info->nodes % 10000 != 0) 
+        return;
+
+    // Calculate the score assuming bestmove is played
+    Node* best_child = root->best_child(false);
+    double win_prob_est = best_child->UCB(false);
+
+    // Print the info line
+    std::cout << "info depth " << info->seldepth \
+              << " score cp " << centipawn_from_prob(win_prob_est) \
+              << " nodes " << info->nodes \
+              << " pv " << move_to_str(best_child->a) << std::endl;
 }
 
 /*  
@@ -430,8 +456,13 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     assert(info->state == ENGINE_SEARCHING);
     LOG("Initial checks done");
 
+    /* Search setup */
+    info->clear();
+    board->ply = 0;
+    const board_t root_board = *board; // Root board
+    int color = board->turn; // Side to move at the root node (White or Black)
+
     // Set up the MCTS Tree
-    const board_t root_board = *board;
     // Node* root = new Node(board, NULLMV, nullptr);
     // TODO: Cleanup
     arena.reset();
@@ -439,24 +470,26 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     Node *root = memory ? new (memory) Node(board, NULLMV, nullptr) : nullptr;
     LOG("Root is at " << root);
 
-    // Perform the search
+    /* Search */
     Node* node;
     double reward;
     while (!search_stopped(info)) {
         // 1) Selection
         node = select(root, board);
-        LOG("Selected '" << to_fen(board) << "' for expansion at " << node);
 
         // 2) Expansion (TODO: Skip this step when OOM)
-        node = expand(node, board);
+        node = expand(node, board, info);
 
         // 3) Simulation
-        reward = simulate(board);
+        reward = simulate(board, color);
 
         // 4) Backpropagation
         backprop(reward, node);
 
-        // 5) Restore board state after traversing up to the root
+        // 5) Update client with current search information
+        print_MCTS_info(root, info);
+
+        // 6) Restore board state after traversing up to the root
         *board = root_board;
     }
 
@@ -495,7 +528,7 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     #endif
 
     /* Cleanup */
-    root->~Node(); // should recursively delete the entire tree (REVIEW)
+    root->~Node(); // should recursively destruct the entire tree (REVIEW)
     arena.reset();
     info->state = ENGINE_STOPPED;
     assert(check(board));

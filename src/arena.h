@@ -9,7 +9,8 @@ public:
       m_size(0),
       m_capacity(reserved_MB << 20) {
           if (m_bytes == nullptr) {
-
+              std::cerr << "Failed to allocate memory for arena\n";
+              exit(1);
           }
       }
 

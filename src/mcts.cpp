@@ -14,8 +14,8 @@
 extern eval_t eval;
 
 // Constants (TODO: Tune with self-play?)
-constexpr double UCB_CONST = 0.7; 
-constexpr int ROLLOUT_BUDGET = 15;
+constexpr double UCB_CONST = 2.7;
+constexpr int ROLLOUT_BUDGET = 3;
 constexpr size_t DEFAULT_ARENA_MB = 2048; /* Default size of the arena in MB */
 
 // Arena allocator 
@@ -188,19 +188,19 @@ void backprop(double reward, Node *node, int root_color, int color) {
     // Diff color: -
 
     // Flip the reward if node is not the side to move
-    reward *= 2*(color == root_color)-1;
+    // reward *= 2*(color == root_color)-1;
 
     Node *curr = node;
     while (curr != nullptr) {
+        reward *= -1.0;
         curr->update(reward);
-        reward *= -1;
         curr = curr->parent;
     }
 }
 
 double Node::UCB(bool exploration_mode) {
-    // double ucb = static_cast<double>(total_reward) / (visits + 1);
-    double ucb = this->avg;
+    double ucb = static_cast<double>(total_reward) / (visits + 1);
+    // double ucb = this->avg;
     if (exploration_mode)
         // Avoid div-by-zero
         ucb += UCB_CONST * std::sqrt(std::log(parent->visits) / (visits + 1));
@@ -248,10 +248,13 @@ Node *Node::insert_child(move_t move, const board_t *board) {
     return child;
 }
 
-// See 184 Lecture slides on AlphaZero
 void Node::update(double reward) {
+
+    // See 184 Lecture slides on AlphaZero
+    /*
     double n = this->visits;
     this->avg = (n/(n+1)) * this->avg + (1.0 / (n+1)) * reward;
+    */
     this->visits++;
     this->total_reward += reward;
 }
@@ -440,11 +443,11 @@ void print_MCTS_info(Node *root, searchinfo_t *info) {
 
     // Calculate the score assuming bestmove is played
     Node* best_child = root->best_child(false);
-    double win_prob_est = best_child->UCB(false);
+    double ucb = best_child->UCB(false);
 
-    // Print the info line
+    // Print the info line (we make sure to scale the cp score back)
     std::cout << "info depth " << info->seldepth \
-              << " score cp " << centipawn_from_prob(win_prob_est) \
+              << " score cp " << centipawn_from_prob((ucb + 1) / 2.0) \
               << " nodes " << info->nodes \
               << " pv " << move_to_str(best_child->a) << std::endl;
 }

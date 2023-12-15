@@ -15,7 +15,7 @@
 
 double _K = 0.8649;
 // https://www.chessprogramming.org/Pawn_Advantage,_Win_Percentage,_and_Elo
-// Sigmoid(s)=1/(1+10^(-K/400))
+// Sigmoid(s)=1/(1+10^(-K * s/400))
 // where K is a scaling constant
 double winning_prob(int score) {
     return 1.0 / (1.0 + std::pow(10.0, -_K*static_cast<double>(score) / 400.0));

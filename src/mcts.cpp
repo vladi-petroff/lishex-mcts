@@ -16,12 +16,18 @@
 extern eval_t eval;
 
 // Constants (TODO: Tune with self-play?)
-constexpr double UCB_CONST = 2.7;
+constexpr double UCB_CONST = 0.7;
 constexpr int ROLLOUT_BUDGET = 3;
 constexpr size_t DEFAULT_ARENA_MB = 2048; /* Default size of the arena in MB */
+constexpr double EPS = 0.5;
 
 // Arena allocator 
 Arena arena(DEFAULT_ARENA_MB);
+
+template <typename T, typename A>
+int arg_max(std::vector<T, A> const& vec) {
+  return static_cast<int>(std::distance(vec.begin(), max_element(vec.begin(), vec.end())));
+}
 
 class Node {
 
@@ -91,7 +97,7 @@ static inline Action random_policy(movelist_t& actions, State *s = NULL) {
     return actions[rand_uint64() % actions.size()];
 }
 
-static inline Action evaluation_based_policy(movelist_t& actions, State* s) {
+static inline Action evaluation_sample_policy(movelist_t& actions, State* s) {
 
     // Get an evaluation score for each child and treat it as a weight
     std::vector<double> weights;
@@ -104,7 +110,7 @@ static inline Action evaluation_based_policy(movelist_t& actions, State* s) {
         // NOTE: After making the move, the evaluation score will be w.r.t.
         // the opponent!
         double weight = (1.0 - winning_prob(evaluate(s, &eval)));
-        weights.push_back(100 * (weight * weight * weight));
+        weights.push_back(100 * (weight * weight));
         undo_move(s); 
     }
     LOG("Categorical weights:");
@@ -117,6 +123,34 @@ static inline Action evaluation_based_policy(movelist_t& actions, State* s) {
     fast_discrete_distribution<int> distribution(weights);
     size_t sampled = distribution(generator);
     LOG("Sampled move " << move_to_str(actions[sampled]));
+    return actions[sampled];
+}
+
+static inline Action evaluation_argmax_policy(movelist_t& actions, State* s) {
+
+    // Get an evaluation score for each child and treat it as a weight
+    std::vector<double> weights;
+    weights.reserve(actions.size());
+    for (const move_t move : actions) {
+        if (!make_move(s, move)) { // Pseudolegal move generation
+            weights.push_back(0.0);
+            continue;
+        }
+        // NOTE: After making the move, the evaluation score will be w.r.t.
+        // the opponent!
+        double weight = (1.0 - winning_prob(evaluate(s, &eval)));
+        weights.push_back(100 * (weight * weight));
+        undo_move(s); 
+    }
+    LOG("Categorical weights:");
+
+    for (size_t i = 0; i < weights.size(); ++i) {
+        LOG(move_to_str(actions[i]) << ": " << weights[i]);
+    }
+
+    // Greedily choose best
+    size_t sampled = arg_max(weights);
+    LOG("Argmax move " << move_to_str(actions[sampled]));
     return actions[sampled];
 }
 
@@ -349,7 +383,10 @@ Node *select(Node *root, State *s) {
 
     Node *node = root;
     while (!node->is_terminal()) {
-        if (node->is_fully_expanded()) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<> dis(0, 1);
+        if (node->is_fully_expanded() || (node->children.size() >= 1 && dis(gen) <= EPS)) {
             node = node->best_child(true);
             /* Make sure the state follows the path along the tree as well */
             make_move(s, node->a);

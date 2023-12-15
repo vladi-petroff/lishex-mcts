@@ -1,5 +1,6 @@
 #include "mcts.h"
 
+#include <random>
 #include <vector>
 #include <cmath>
 #include <climits>
@@ -9,6 +10,7 @@
 #include "sgd.h"
 #include "board.h"
 #include "arena.h"
+#include "categorical.h"
 
 // Global evaluator
 extern eval_t eval;
@@ -83,8 +85,39 @@ std::ostream& operator << (std::ostream &o, const Node* node) {
 // REVIEW: Here, we could experiment with multiple rollout policies
 // and report the results?
 
-[[__always_inline__]] static inline Action random_policy(movelist_t& actions) {
+[[__always_inline__]] 
+static inline Action random_policy(movelist_t& actions, State *s = NULL) {
+    (void) s; // Ignore the state if our policy is random
     return actions[rand_uint64() % actions.size()];
+}
+
+static inline Action evaluation_based_policy(movelist_t& actions, State* s) {
+
+    // Get an evaluation score for each child and treat it as a weight
+    std::vector<double> weights;
+    weights.reserve(actions.size());
+    for (const move_t move : actions) {
+        if (!make_move(s, move)) { // Pseudolegal move generation
+            weights.push_back(0.0);
+            continue;
+        }
+        // NOTE: After making the move, the evaluation score will be w.r.t.
+        // the opponent!
+        double weight = (1.0 - winning_prob(evaluate(s, &eval)));
+        weights.push_back(100 * (weight * weight * weight));
+        undo_move(s); 
+    }
+    LOG("Categorical weights:");
+    for (size_t i = 0; i < weights.size(); ++i) {
+        LOG(move_to_str(actions[i]) << ": " << weights[i]);
+    }
+
+    // Sample from a categorical distribution
+    std::default_random_engine generator;
+    fast_discrete_distribution<int> distribution(weights);
+    size_t sampled = distribution(generator);
+    LOG("Sampled move " << move_to_str(actions[sampled]));
+    return actions[sampled];
 }
 
 
@@ -94,7 +127,7 @@ std::ostream& operator << (std::ostream &o, const Node* node) {
  * 
  * @return Node* or nullptr if no legal action could be taken
  */
-Node* select_and_insert(Node* node, State* s, Action (*policy)(movelist_t&)) {
+Node* select_and_insert(Node* node, State* s, Action (*policy)(movelist_t&, State*)) {
 
     assert(node != nullptr);
     assert(s != nullptr);
@@ -103,7 +136,7 @@ Node* select_and_insert(Node* node, State* s, Action (*policy)(movelist_t&)) {
     // We sample actions until we find a valid one
     LOG("Board before making move:");
     print(s);
-    Action a = policy(node->untried_moves);
+    Action a = policy(node->untried_moves, s);
     LOG("Making move " << move_to_str(a));
     LOG("Remaining moves are: ");
     print_moves(node->untried_moves);
@@ -114,7 +147,7 @@ Node* select_and_insert(Node* node, State* s, Action (*policy)(movelist_t&)) {
             LOG("We ran out of moves in this state!");
             return nullptr; 
         } 
-        a = policy(node->untried_moves);
+        a = policy(node->untried_moves, s);
         LOG("Failed! Making move " << move_to_str(a));
     }
     node = node->insert_child(a, s);
@@ -142,7 +175,7 @@ double rollout(Node *node, State *s) {
     int budget = ROLLOUT_BUDGET;
     while (!node->is_terminal() && budget --> 0) {
         // Note: select_and_insert can return a nullptr
-        Node *child = select_and_insert(node, s, &rollout_policy);
+        Node *child = select_and_insert(node, s, &random_policy);
         if (child == nullptr) {
             break;
         }
@@ -293,7 +326,7 @@ Node *insert_node_with_tree_policy(Node *root, State *s) {
             } 
         } else {
             LOG("Inserting new child");
-            Node *child = select_and_insert(node, s, &prior_prob);
+            Node *child = select_and_insert(node, s, &random_policy);
             return child;
         }
     }
@@ -335,11 +368,11 @@ Node *select(Node *root, State *s) {
  * @param moves Allowed moves
  * @return Action played on success, NULLMV otherwise.
  */
-Action play_legal(State *s, Action (*policy)(movelist_t&), movelist_t& moves) {
+Action play_legal(State *s, Action (*policy)(movelist_t&, State*), movelist_t& moves) {
 
     // Pick a move according to policy 
     // (REVIEW: We might want the policy to take in the state too?)
-    Action a = policy(moves);
+    Action a = policy(moves, s);
     while (!make_move(s, a)) {
         // Remove the action from the list, as it is illegal
         moves.erase(moves.find(a));
@@ -347,7 +380,7 @@ Action play_legal(State *s, Action (*policy)(movelist_t&), movelist_t& moves) {
             // Ran out of moves -> can't play any legal action from state s
             return NULLMV;
         }
-        a = policy(moves);
+        a = policy(moves, s);
     }
     return a;
 }
@@ -375,7 +408,7 @@ Node *expand(Node *node, State *s, searchinfo_t *info) {
     }
 
     // Attempt to expand the node (note: might mutate s)
-    Action a = play_legal(s, &prior_prob, node->untried_moves);
+    Action a = play_legal(s, &random_policy, node->untried_moves);
     if (a != NULLMV) {
         ++info->nodes;
         info->seldepth = std::max(info->seldepth, s->ply);

@@ -52,6 +52,7 @@ size_t batch_size = 262144;
 // Random number generator for initializing positions and velocities
 std::random_device rd;
 std::mt19937 rng(rd());
+extern eval_t eval;
 
 inline double rand_within(int lower, int upper) {
     std::uniform_real_distribution<double> unif(lower, upper);
@@ -74,7 +75,8 @@ double error(datapoint_t& x) {
     searchinfo_t i[1];
     stack_t s[MAX_MOVES];
     setup(b, x.fen);
-    int score = quiescence(-oo, +oo, b, i, s);
+    //int score = quiescence(-oo, +oo, b, i, s);
+    int score = evaluate(b, &eval);
     return std::pow(x.result - winning_prob(score), 2);
 }
 

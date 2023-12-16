@@ -11,9 +11,9 @@
 //                               0, 0, 94, 281, 297, 512, 936, 50000};
 
 /* Self-trained values */
-int value_mg[PIECE_NO] = {0, 82, 337, 365, 477, 1025, 50000,
+int value_mg[PIECE_NO] = {0, 59, 339, 379, 548, 1033, 50000,
                               0, 0, 82, 337, 365, 477, 1025, 50000};
-int value_eg[PIECE_NO] = {0, 94, 281, 297, 512, 936, 50000,
+int value_eg[PIECE_NO] = {0, 103, 280, 293, 510, 985, 50000,
                               0, 0, 94, 281, 297, 512, 936, 50000};
 
 // REVIEW: 4th PMO Tuning iteration parameters

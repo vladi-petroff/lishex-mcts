@@ -347,8 +347,8 @@ int quiescence(int α, int β, board_t *board, searchinfo_t *info, stack_t *stac
 
 /* Search the tree starting from the root node (current board state) */
 void search(board_t *board, searchinfo_t *info) {
-    //alphabeta(board, info);
-    MCTS_Search(board, info);
+    alphabeta(board, info);
+    //MCTS_Search(board, info);
 }
 
 

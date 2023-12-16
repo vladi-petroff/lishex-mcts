@@ -5,8 +5,7 @@
 #include "uci.h"
 #include "attack.h"
 #include "search.h"
-//#include "sgd.h"
-#include "categorical.h"
+#include "sgd.h"
 
 int main(int argc, char* argv[]) {
 

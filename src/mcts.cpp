@@ -243,19 +243,14 @@ double rollout(Node *node, State *s) {
 
 /** 
  * @brief Backpropagate the result of a playout up to the root of the tree
- * @param double reward achieved during last rollout
- * @param Node* Pointer to the selected node from which the rollout was performed
- * @param int Color of the root player
- * @param int Color of the node player
+ * @param reward reward achieved during last rollout
+ * @param node Pointer to the selected node from which the rollout was performed
+ * @param info Search information, including movetime & search status
  */
-void backprop(double reward, Node *node, int root_color, int color) {
+void backprop(double reward, Node *node, searchinfo_t *info) {
     assert(node != nullptr);
 
-    // Same color: +
-    // Diff color: -
-
-    // Flip the reward if node is not the side to move
-    // reward *= 2*(color == root_color)-1;
+    if (search_stopped(info)) return;
 
     Node *curr = node;
     while (curr != nullptr) {
@@ -332,15 +327,13 @@ To avoid local optima, we can use some parametrized policy
 to pick the most 'interesting' areas of the tree to expand
 // See: https://xyzml.medium.com/learn-ai-game-playing-algorithm-part-ii-monte-carlo-tree-search-2113896d6072
 
-(Could it be e.g. a Thompson distribution or sth?)
-
-For now, we use a random policy lol
+(Could it be e.g. a Thompson distribution or something?)
+For now, we use a random policy
 */
 
 Action prior_prob(movelist_t& actions) {
     return random_policy(actions);
 }
-
 
 // TODO: Review this for correctness
 Node *insert_node_with_tree_policy(Node *root, State *s) {
@@ -375,11 +368,14 @@ Node *insert_node_with_tree_policy(Node *root, State *s) {
  * 
  * @param root Root of the game tree
  * @param s Board state at the root
+ * @param searchinfo_t Search info, including time to move etc.
  * @return Node* The node selected for expansion
  */
-Node *select(Node *root, State *s) {
+Node *select(Node *root, State *s, searchinfo_t *info) {
     assert(root != nullptr);
     assert(s != nullptr);
+
+    if (search_stopped(info)) return root;
 
     Node *node = root;
     while (!node->is_terminal()) {
@@ -434,11 +430,13 @@ Node *expand(Node *node, State *s, searchinfo_t *info) {
     assert(node != nullptr);
     assert(s != nullptr);
 
+    if (search_stopped(info)) return node;
+
     // REVIEW: Redundant is_fully_expanded check?
     if (node->is_terminal() || node->is_fully_expanded())
         return node;
 
-    // Check if can expand:
+    // Check if enough memory to expand the tree
     if (!arena.has_space(sizeof(Node))) {
         LOG("Arena ran out of space!\n");
         return node;
@@ -460,11 +458,13 @@ Node *expand(Node *node, State *s, searchinfo_t *info) {
  *  Like rollout(), but doesn't insert any new nodes into the tree
  * @param node Node to start the playout from
  * @param s Board state corresponding to @param node
- * @param int The root player's color (WHITE or BLACK)
+ * @param info Search information, including movetime
  * @return double The reward, r \in [0, 1] for the side to move in state s
  */
-double simulate(State *s) {
+double simulate(State *s, searchinfo_t *info) {
     assert(s != nullptr);
+
+    if (search_stopped(info)) return 0;
 
     // We'll return the reward for the player to move in state s
     int color = s->turn;
@@ -545,8 +545,6 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     info->clear();
     board->ply = 0;
     const board_t root_board = *board; // Root board
-    int root_color = board->turn; // Side to move at the root node (White or Black)
-    int color = root_color;
 
     // Set up the MCTS Tree
     // Node* root = new Node(board, NULLMV, nullptr);
@@ -561,17 +559,16 @@ void MCTS_Search(board_t* board, searchinfo_t *info) {
     double reward;
     while (!search_stopped(info)) {
         // 1) Selection
-        node = select(root, board);
+        node = select(root, board, info);
 
-        // 2) Expansion (TODO: Skip this step when OOM)
+        // 2) Expansion (We skip this step when OOM)
         node = expand(node, board, info);
 
         // 3) Simulation
-        color = board->turn;
-        reward = simulate(board);
+        reward = simulate(board, info);
 
         // 4) Backpropagation
-        backprop(reward, node, root_color, color);
+        backprop(reward, node, info);
 
         // 5) Update client with current search information
         print_MCTS_info(root, info);

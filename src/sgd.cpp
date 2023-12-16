@@ -29,13 +29,13 @@ int centipawn_from_prob(double p) {
 namespace {
 
 // Adam parameters
-constexpr double initial_a = 2; // Initial step size
+constexpr double initial_a = 10; // Initial step size
 constexpr double b1 = 0.9;         // Decay (forgetting) factor for gradients
 constexpr double b2 = 0.999;       // Decay factor for second moments of gradients
 constexpr double epsilon = 1e-8;   // Avoid div-by-zero
 
 // Tuning Parameters
-constexpr bool tune_material    = 0;
+constexpr bool tune_material    = 1;
 constexpr bool tune_pawn_psqt   = 0;
 constexpr bool tune_knight_psqt = 0;
 constexpr bool tune_bishop_psqt = 0;
@@ -43,7 +43,7 @@ constexpr bool tune_rook_psqt   = 0;
 constexpr bool tune_queen_psqt  = 0;
 constexpr bool tune_king_psqt   = 0;
 constexpr bool tune_king_safety = 0;
-constexpr bool tune_pawn_eval   = 1;
+constexpr bool tune_pawn_eval   = 0;
 constexpr int datapoints_no = 2'000'000;
 constexpr int epochs_no = 500;
 size_t batch_size = 262144;
@@ -140,9 +140,14 @@ void register_parameters() {
 
     if constexpr (tune_material) {
         std::cout << "Tuning material values" << std::endl;
-        for (int i = 0; i < PIECE_NO; ++i) {
-            parameters.push_back({"value_mg["+std::to_string(i)+"]", &value_mg[i]});
-            parameters.push_back({"value_eg["+std::to_string(i)+"]", &value_eg[i]});
+        // for (int i = 0; i < PIECE_NO; ++i) {
+        for (piece_t p = PAWN; p <= QUEEN; ++p) {
+            parameters.push_back({"value_mg["+std::to_string(p)+"]", &value_mg[p]});
+            parameters.push_back({"value_eg["+std::to_string(p)+"]", &value_eg[p]});
+
+            // Randomize
+            value_mg[p] = rand_uint64() % 500; 
+            value_eg[p] = rand_uint64() % 500; 
         }
     }
 
